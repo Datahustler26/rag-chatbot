@@ -178,6 +178,24 @@ sequenceDiagram
 
 ---
 
+## 🛠️ Technology Stack (RAG Stack)
+
+| Layer | Component | Technology | Description |
+|---|---|---|---|
+| **RAG Orchestrator** | Core Logic | **Custom Python RAG** | Lightweight, direct orchestration without heavy wrappers (like LangChain or LlamaIndex) to keep latency under target. |
+| **Vector DB** | Knowledge Retrieval | **Qdrant** | Local HNSW-indexed vector database for ultra-fast dense semantic search. |
+| **Dense Embeddings** | Representation | **BAAI/bge-base-en-v1.5** | High-accuracy HuggingFace encoder (768-dim) for asymmetric semantic retrieval. |
+| **Sparse Index** | Keyphrase Match | **Okapi BM25** | In-memory lexical match system for exact keywords. |
+| **Rank Fusion** | Hybrid Merging | **RRF (Reciprocal Rank Fusion)** | Fusion algorithm combining dense and sparse search rankings. |
+| **Reranker** | Context Refinement | **ms-marco-MiniLM-L-6-v2** | Cross-encoder model to re-score the top merged snippets and choose the top 5. |
+| **LLM Inference** | Response Generator | **Google Gemini 2.5/1.5** (Default) | Configurable HTTP adapters for Gemini, OpenAI, Claude, or local Ollama. |
+| **PDF Extraction** | Data Source Parser | **PyMuPDF (fitz)** | Rapid native PDF text extraction. |
+| **OCR Fallback** | Image-to-Text | **Tesseract OCR** | Automatic OCR when PDF text density is low (e.g., scanned documents). |
+| **Web Service** | Interface API | **FastAPI** | High-performance async Python backend server. |
+| **Frontend UI** | Presentation | **Vanilla HTML5 & JavaScript** | Responsive web client with real-time markdown and citation rendering. |
+
+---
+
 ## 📂 Project Directory Structure
 
 ```
