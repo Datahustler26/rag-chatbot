@@ -1,0 +1,43 @@
+# Environments & Virtual Envs
+.venv/
+venv/
+ENV/
+env/
+dist/
+build/
+*.egg-info/
+
+# Cache directories
+.cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Local databases and vector store storage
+qdrant_test_db/
+qdrant_storage/
+
+# Sensitive files (Private keys!)
+.env
+.env.*
+
+# VS Code & IDEs
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# OS Files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Temporary / testing files
+test_pdfs/
+scripts/test_llm_connection.py
