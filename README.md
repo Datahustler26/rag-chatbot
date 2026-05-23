@@ -10,6 +10,164 @@ A state-of-the-art Retrieval-Augmented Generation (RAG) pipeline designed for qu
 
 ---
 
+## 🏛️ Architecture Overview & Low-Level Design (LLD)
+
+RAGCore is structured as a decoupled multi-tiered service separating document processing, vector embeddings index, hybrid retrieval, and context-grounded text generation.
+
+### System Topology & Interfaces
+
+```mermaid
+graph TD
+    %% Client Interface %%
+    A[HTML/JS Web Client] <-->|HTTP POST /api/chat| B[FastAPI Web Server]
+    A <-->|HTTP POST /api/ingest| B
+
+    %% Backend Controllers %%
+    subgraph Core System Modules
+        B --> C[PDF Ingestion Pipeline]
+        B --> D[Hybrid Retriever]
+        D --> E[Grounded Generator]
+    end
+
+    %% Data Providers %%
+    subgraph Data & Inference Providers
+        C -->|Raw Text / OCR| F[Sentence Embedder]
+        F -->|768-dim Vectors| G[(Qdrant Vector DB)]
+        C -->|Raw Chunks| H[In-Memory BM25 Sparse Index]
+        D -->|Vector Search| G
+        D -->|Keyphrase Search| H
+        D -->|Candidate Rerank| I[Cross-Encoder Reranker]
+        E -->|Grounded Context| J[LLM Api Client: Gemini/OpenAI/Claude]
+    end
+    
+    style Core System Modules fill:#1e1e24,stroke:#3b82f6,stroke-width:2px;
+    style Data & Inference Providers fill:#1e1e24,stroke:#10b981,stroke-width:2px;
+```
+
+---
+
+### Low-Level Design (LLD) Module Descriptions
+
+#### 1. Ingestion Pipeline (`backend/ingest.py`)
+Responsible for reading raw PDF documents, extracting text content (with scanned page OCR fallback), cleaning formatting anomalies, and parsing headings.
+*   **Key Classes & Data Structures**:
+    ```python
+    @dataclass
+    class Chunk:
+        chunk_id: str      # MD5 Hash + Page + Index
+        pdf_id: str        # MD5 Hash of PDF file
+        filename: str      # PDF Filename
+        page: int          # Page Number (1-indexed)
+        text: str          # Raw text snippet
+        tokens: int        # Number of tiktoken tokens
+        language: str      # ISO 2-character language code
+        section: str       # Section heading parsed from text
+        ocr_used: bool     # Flag indicating if OCR was triggered
+
+    @dataclass
+    class PDFMeta:
+        pdf_id: str
+        filename: str
+        pages: int
+        chunks: list[Chunk]
+    ```
+*   **Workflow**:
+    `ingest_pdf(pdf_path)` -> Extract page text via `PyMuPDF` -> If char count < 100, execute `pytesseract` OCR -> `clean_text()` (unicode normalization and hyphen cleanup) -> `token_chunks()` (recursive chunking) -> Yield `PDFMeta`.
+
+#### 2. Vector Embeddings (`backend/embedder.py`)
+Provides thread-safe wrappers for HuggingFace embedding models.
+*   **Key Interface**:
+    ```python
+    class Embedder:
+        def embed_query(self, text: str) -> np.ndarray:
+            # Prepends "Represent this question for searching relevant passages: " for BGE asymmetric retrieval
+            ...
+        def embed_passages(self, texts: list[str]) -> np.ndarray:
+            ...
+    ```
+
+#### 3. Vector Database Provider (`backend/vector_store.py`)
+Encapsulates CRUD interactions with the local Qdrant engine.
+*   **Key Interface**:
+    ```python
+    class VectorStore:
+        def upsert_chunks(self, chunks: list[dict]) -> int:
+            # Batch uploads 768-dim payload vectors to Qdrant collection
+            ...
+        def search(self, query_vector: list[float], top_k: int) -> list[dict]:
+            # HNSW Cosine Similarity search over Qdrant
+            ...
+    ```
+
+#### 4. Hybrid Retriever & Reranker (`backend/retriever.py`)
+Executes dense semantic queries, sparse keyword scoring, reciprocal rank fusion, and deep learning reranking.
+*   **Key Classes & Data Structures**:
+    ```python
+    class BM25:
+        # Lightweight in-memory Okapi BM25 indexer
+        def score(self, query: str) -> list[tuple[int, float]]: ...
+
+    class Reranker:
+        # Cross-Encoder (ms-marco-MiniLM-L-6-v2) scorer
+        def rerank(self, query: str, chunks: list[dict]) -> list[dict]: ...
+
+    @dataclass
+    class RetrievalResult:
+        chunks: list[dict]       # Sorted top 5 reranked chunks
+        dense_time_ms: float
+        rerank_time_ms: float
+        total_time_ms: float
+        query: str
+    ```
+
+#### 5. Contextual LLM Generator (`backend/generator.py`)
+Constructs citation-grounded LLM prompts, handles HTTP API calls to inference services, and validates output structure.
+*   **Key Interface**:
+    ```python
+    class Generator:
+        def generate(self, question: str, retrieval: RetrievalResult) -> dict:
+            # formats user prompt -> makes HTTP request to Gemini/OpenAI -> parses inline citations
+            ...
+    ```
+
+---
+
+### End-to-End Chat Query Sequence Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Web Client
+    participant API as FastAPI Server (server.py)
+    participant Ret as Retriever (retriever.py)
+    participant VS as Qdrant Vector DB
+    participant BM as BM25 Index
+    participant Rer as Reranker (MiniLM)
+    participant Gen as Generator (generator.py)
+    participant LLM as Google Gemini API
+
+    User->>API: HTTP POST /api/chat { "question": "..." }
+    API->>Ret: retrieve(query)
+    Note over Ret: Step A: Embed query with BGE
+    Ret->>VS: search(query_vector, top_k=20)
+    VS-->>Ret: Dense Matches (Top 20)
+    Ret->>BM: score(query, top_k=20)
+    BM-->>Ret: Sparse Matches (Top 20)
+    Note over Ret: Step B: Reciprocal Rank Fusion (RRF)
+    Ret->>Rer: rerank(query, merged_chunks)
+    Rer-->>Ret: Reranked Contexts (Top 5)
+    Ret-->>API: RetrievalResult
+    API->>Gen: generate(question, retrieval)
+    Note over Gen: Step C: Format Grounding Prompt
+    Gen->>LLM: Post HTTP Request with API key
+    LLM-->>Gen: Text Response + Inline Citations
+    Note over Gen: Step D: Parse & Verify Citations
+    Gen-->>API: Grounded Answer JSON
+    API-->>User: HTTP 200 OK Response
+```
+
+---
+
 ## 🌟 Key Features
 
 *   **⚡ Hybrid Dense-Sparse Retrieval**: Combines semantic embeddings (HNSW Dense Search via Qdrant) and exact keyword scoring (in-memory BM25 Search) using **Reciprocal Rank Fusion (RRF)**.
@@ -17,46 +175,6 @@ A state-of-the-art Retrieval-Augmented Generation (RAG) pipeline designed for qu
 *   **📷 Scanned PDF OCR Fallback**: Automatically invokes **Tesseract OCR** when native text extraction yields sparse characters, accommodating scanned papers and images.
 *   **🌐 Flexible LLM Adapters**: Native support for **Google Gemini (Default)**, **OpenAI GPT**, **Anthropic Claude**, and local **Ollama** models.
 *   **📝 Citation Grounding**: Prompts the LLM to output precise inline citations (e.g., `[filename, p.N]`) and parses them to guarantee factual accountability.
-
----
-
-## 🗺️ Architectural Workflow
-
-The diagram below details the ingestion pipeline and the end-to-end user query lifecycle.
-
-```mermaid
-graph TD
-    %% Ingestion Pipeline %%
-    subgraph Ingestion Pipeline [1. Document Ingestion]
-        A[PDF Documents] --> B[Text Extraction PyMuPDF]
-        B --> C{Text Native?}
-        C -- Yes --> D[Clean & Normalize Text]
-        C -- No < 100 chars --> E[Tesseract OCR Fallback]
-        E --> D
-        D --> F[Recursive Token Chunking]
-        F --> G[HuggingFace Embeddings BGE]
-        G --> H[(Qdrant Vector Database)]
-        F --> I[In-Memory BM25 Index]
-    end
-
-    %% Query Pipeline %%
-    subgraph Query Pipeline [2. Hybrid Retrieval & Generation]
-        J[User Question] --> K[Dense Query Embedding]
-        J --> L[Sparse Term Scoring]
-        K --> M[Qdrant ANN Vector Search]
-        L --> N[BM25 Index Search]
-        M --> O[Reciprocal Rank Fusion RRF]
-        N --> O
-        O --> P[Cross-Encoder Reranker]
-        P --> Q[Construct Citation-Aware Prompt]
-        Q --> R[LLM Inference: Gemini, OpenAI, Claude, Ollama]
-        R --> S[Parse Grounded Citations & Sources]
-        S --> T[JSON Response to Chat UI]
-    end
-    
-    style Ingestion Pipeline fill:#1a1c23,stroke:#3b82f6,stroke-width:2px;
-    style Query Pipeline fill:#1a1c23,stroke:#10b981,stroke-width:2px;
-```
 
 ---
 
