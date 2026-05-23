@@ -23,14 +23,14 @@ graph TD
     A <-->|HTTP POST /api/ingest| B
 
     %% Backend Controllers %%
-    subgraph Core System Modules
+    subgraph core_system ["Core System Modules"]
         B --> C[PDF Ingestion Pipeline]
         B --> D[Hybrid Retriever]
         D --> E[Grounded Generator]
     end
 
     %% Data Providers %%
-    subgraph Data & Inference Providers
+    subgraph data_providers ["Data & Inference Providers"]
         C -->|Raw Text / OCR| F[Sentence Embedder]
         F -->|768-dim Vectors| G[(Qdrant Vector DB)]
         C -->|Raw Chunks| H[In-Memory BM25 Sparse Index]
@@ -40,8 +40,8 @@ graph TD
         E -->|Grounded Context| J[LLM Api Client: Gemini/OpenAI/Claude]
     end
     
-    style Core System Modules fill:#1e1e24,stroke:#3b82f6,stroke-width:2px;
-    style Data & Inference Providers fill:#1e1e24,stroke:#10b981,stroke-width:2px;
+    style core_system fill:#1e1e24,stroke:#3b82f6,stroke-width:2px;
+    style data_providers fill:#1e1e24,stroke:#10b981,stroke-width:2px;
 ```
 
 ---
